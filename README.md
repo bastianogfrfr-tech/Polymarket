@@ -1,9 +1,11 @@
 # polybot – Polymarket Wetter-Bot
 
-Handelt automatisch die Märkte „Highest temperature in <Stadt> on <Datum>“ auf Polymarket.
+Handelt automatisch die Wettermärkte auf Polymarket: „Highest temperature in <Stadt> on
+<Datum>“ und „Lowest temperature in <Stadt> on <Datum>“ (über 90 Städte, °C und °F).
 
 **Strategie:** Erst spät am Tag (Ortszeit der Wetterstation) ist der Tageshöchstwert schon
-fast vollständig gemessen. Der Bot holt sich die echten Messwerte der Station (METAR,
+fast vollständig gemessen (beim Tiefstwert genauso, sobald der Rest des Tages ihn nicht
+mehr unterbieten kann). Der Bot holt sich die echten Messwerte der Station (METAR,
 dieselbe Station, die Polymarket für die Auflösung nimmt) und dazu die Wettermodelle
 (Open-Meteo, Ersatz: MET Norway). Daraus berechnet er für jeden Temperatur-Bucket eine
 Wahrscheinlichkeit. Er kauft nur, wenn diese nach Gebühren deutlich über dem Marktpreis liegt.

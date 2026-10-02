@@ -3,6 +3,7 @@
 Idea: late in the local day most of the daily high is already observed. The final
 high is max(observed so far, high of the remaining hours). The remaining part comes
 from weather models, corrected by how far the station currently deviates from them.
+Daily lows work the same way on negated temperatures: min(x) = -max(-x).
 """
 import math
 import time
@@ -29,6 +30,7 @@ class Observation:
     tz: ZoneInfo
     local_now: datetime
     obs_max_c: float        # highest reading so far on the local day
+    obs_min_c: float        # lowest reading so far on the local day
     last_temp_c: float
     last_time: datetime     # UTC
     n_obs: int
@@ -37,18 +39,27 @@ class Observation:
 @dataclass
 class Estimate:
     obs: Observation
-    mu_c: float             # expected high of the remaining hours (-inf if day is over)
+    kind: str               # "high" or "low"
+    mu_c: float             # expected extreme of the remaining hours, sign-flipped for
+                            # "low" (-inf if the day is over)
     sigma_c: float
     remaining_hours: float
     hours_to_peak: float
     bias_c: float
     source: str
 
+    @property
+    def sign(self):
+        return 1 if self.kind == "high" else -1
+
     def prob(self, lo, hi, unit):
-        """P(rounded daily high in [lo, hi]) in the market's unit."""
-        conv = (lambda c: c * 9 / 5 + 32) if unit == "F" else (lambda c: c)
+        """P(rounded daily high/low in [lo, hi]) in the market's unit."""
+        s = self.sign
+        if s < 0:  # work on negated temperatures
+            lo, hi = -hi, -lo
+        conv = (lambda c: c * 9 / 5 + 32 * s) if unit == "F" else (lambda c: c)
         scale = 9 / 5 if unit == "F" else 1.0
-        floor = conv(self.obs.obs_max_c)
+        floor = conv(s * (self.obs.obs_max_c if s > 0 else self.obs.obs_min_c))
         mu = conv(self.mu_c) if self.mu_c != float("-inf") else float("-inf")
         sigma = self.sigma_c * scale
 
@@ -81,7 +92,8 @@ def observe(station, day):
         return None
     today.sort()
     return Observation(station, lat, lon, tz, datetime.now(tz),
-                       max(v for _, v in today), today[-1][1], today[-1][0], len(today))
+                       max(v for _, v in today), min(v for _, v in today),
+                       today[-1][1], today[-1][0], len(today))
 
 
 def _forecast_open_meteo(lat, lon):
@@ -132,16 +144,18 @@ def forecast(lat, lon):
     return fc, source
 
 
-def estimate(obs, day):
+def estimate(obs, day, kind="high"):
     fc, source = forecast(obs.lat, obs.lon)
     if not fc:
         return None
+    s = 1 if kind == "high" else -1
+    fc = {t: [s * v for v in vals] for t, vals in fc.items()}
 
     # Station vs. model at the latest observation.
     nearest = min(fc, key=lambda t: abs(t - obs.last_time))
     bias = 0.0
     if abs(nearest - obs.last_time) <= timedelta(hours=1):
-        bias = max(-3.0, min(3.0, obs.last_temp_c - mean(fc[nearest])))
+        bias = max(-3.0, min(3.0, s * obs.last_temp_c - mean(fc[nearest])))
 
     now = datetime.now(timezone.utc)
     end_of_day = datetime.combine(day + timedelta(days=1), datetime.min.time(), obs.tz)
@@ -149,7 +163,7 @@ def estimate(obs, day):
     rem_hours = max(0.0, (end_of_day - now).total_seconds() / 3600)
 
     if not remaining:
-        return Estimate(obs, float("-inf"), 0.3, rem_hours, 0.0, bias, source)
+        return Estimate(obs, kind, float("-inf"), 0.3, rem_hours, 0.0, bias, source)
 
     def corrected(t, v):  # bias fades out over ~6 hours
         w = 0.8 * math.exp(-(t - now).total_seconds() / 3600 / 6)
@@ -162,4 +176,4 @@ def estimate(obs, day):
     per_model = [max(corrected(t, fc[t][i]) for t in remaining) for i in range(n_models)]
     spread = pstdev(per_model) if len(per_model) > 1 else 0.8
     sigma = math.sqrt(min(3.0, 0.5 + 0.3 * hours_to_peak) ** 2 + spread ** 2)
-    return Estimate(obs, mu, sigma, rem_hours, hours_to_peak, bias, source)
+    return Estimate(obs, kind, mu, sigma, rem_hours, hours_to_peak, bias, source)

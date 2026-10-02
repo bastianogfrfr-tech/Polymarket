@@ -38,6 +38,7 @@ class TempEvent:
     day: date
     station: str        # ICAO, e.g. EGLC
     unit: str           # "C" or "F"
+    kind: str           # "high" or "low"
     buckets: list
 
 
@@ -63,8 +64,11 @@ def _slug_date(slug):
     return date(int(m.group(3)), MONTHS.index(m.group(1)) + 1, int(m.group(2)))
 
 
+PREFIXES = {"highest-temperature-in-": "high", "lowest-temperature-in-": "low"}
+
+
 def fetch_temperature_events(days):
-    """Open 'highest-temperature-in-<city>-on-<date>' events for the given dates."""
+    """Open highest/lowest-temperature-in-<city>-on-<date> events for the given dates."""
     events, offset = {}, 0
     while True:
         r = SESSION.get(f"{GAMMA}/events", params={
@@ -81,7 +85,8 @@ def fetch_temperature_events(days):
     out = []
     for e in events.values():
         slug = e["slug"]
-        if not slug.startswith("highest-temperature-in-"):
+        prefix = next((p for p in PREFIXES if slug.startswith(p)), None)
+        if not prefix:
             continue
         d = _slug_date(slug)
         if d not in days:
@@ -107,8 +112,9 @@ def fetch_temperature_events(days):
                 yes_ask=float(m.get("bestAsk") or 1),
                 no_ask=1 - float(m.get("bestBid") or 0)))
         if buckets:
-            city = slug[len("highest-temperature-in-"):].rsplit("-on-", 1)[0]
-            out.append(TempEvent(slug, city, d, st.group(1).upper(), unit, buckets))
+            city = slug[len(prefix):].rsplit("-on-", 1)[0]
+            out.append(TempEvent(slug, city, d, st.group(1).upper(), unit,
+                                 PREFIXES[prefix], buckets))
     return out
 
 

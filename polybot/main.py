@@ -39,6 +39,15 @@ def fee_per_share(bps, price):
     return bps / 10000 * min(price, 1 - price)
 
 
+def settled_enough(est):
+    """Trade only when observations dominate: the peak (or trough) is about now, or the
+    rest of the day can no longer beat what was already observed."""
+    if est.hours_to_peak <= CFG.max_hours_to_peak:
+        return True
+    observed = est.sign * (est.obs.obs_max_c if est.kind == "high" else est.obs.obs_min_c)
+    return est.mu_c + 2.5 * est.sigma_c < observed - 0.5
+
+
 def find_candidates(state):
     today = datetime.now(timezone.utc).date()
     days = {today - timedelta(days=1), today, today + timedelta(days=1)}
@@ -52,11 +61,11 @@ def find_candidates(state):
                 continue  # local day has not started yet
             if obs.local_now.date() == ev.day and obs.local_now.hour < CFG.min_local_hour:
                 continue  # too early: little information beyond the forecast
-            est = estimate(obs, ev.day)
+            est = estimate(obs, ev.day, ev.kind)
         except Exception as e:
             print(f"  ! {ev.city}: weather data failed ({e})")
             continue
-        if est is None or est.hours_to_peak > CFG.max_hours_to_peak:
+        if est is None or not settled_enough(est):
             continue
         probs = {b.market_id: est.prob(b.lo, b.hi, ev.unit) for b in ev.buckets}
         for b in ev.buckets:
@@ -81,7 +90,9 @@ def find_candidates(state):
                     "tick": b.tick, "min_size": b.min_size, "prob": prob, "ask": ask, "bid": bid,
                     "ask_size": ask_size, "cost": cost, "edge": edge,
                     "ev_per_usd": prob / cost - 1,
-                    "obs_max_c": est.obs.obs_max_c, "mu_c": est.mu_c, "sigma_c": est.sigma_c,
+                    "kind": ev.kind,
+                    "obs_ext_c": est.obs.obs_max_c if ev.kind == "high" else est.obs.obs_min_c,
+                    "mu_c": est.sign * est.mu_c, "sigma_c": est.sigma_c,
                     "bias_c": est.bias_c, "hours_to_peak": est.hours_to_peak,
                     "local_time": est.obs.local_now.strftime("%H:%M"), "source": est.source,
                 })
@@ -108,8 +119,8 @@ Stake: {stake:.2f} USDC  ->  Potential Return: {shares:.2f} USDC
 Estimated Probability (ESTIMATE): {c['prob']:.1%}
 Market Probability: {c['ask']:.1%}
 Edge (after fees): {c['edge']:+.1%}   EV per USDC: {c['ev_per_usd']:+.1%}
-Station {c['station']} local {c['local_time']}: max so far {c['obs_max_c']:.1f}°C, \
-rest-of-day high {c['mu_c']:.1f}±{c['sigma_c']:.1f}°C (bias {c['bias_c']:+.1f}, {c['source']})""")
+Station {c['station']} local {c['local_time']}: daily {c['kind']} so far {c['obs_ext_c']:.1f}°C, \
+rest-of-day {c['kind']} {c['mu_c']:.1f}±{c['sigma_c']:.1f}°C ({c['source']})""")
 
 
 def run_once(trader):
@@ -130,7 +141,7 @@ def run_once(trader):
         print("  NO TRADE: nothing with enough edge")
         return
     for c in cands[:5]:
-        print(f"  cand {c['city']:<14} {c['bucket']:<14} {c['side']:<3} "
+        print(f"  cand {c['city']:<14} {c['kind']:<4} {c['bucket']:<14} {c['side']:<3} "
               f"p={c['prob']:.2f} ask={c['ask']:.2f} edge={c['edge']:+.2f}")
 
     for c in cands:
